@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Save the Bubble!</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Prevent pull-to-refresh and selection on mobile devices */
+        body {
+            overscroll-behavior-y: contain;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            touch-action: none; /* Prevents scrolling while tapping */
+        }
+    </style>
+</head>
+<body class="bg-slate-900 min-h-screen flex items-center justify-center font-sans text-slate-800 p-4">
+
+    <!-- Game Container -->
+    <div class="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden" style="aspect-ratio: 4/3;">
+        
+        <!-- Score HUD -->
+        <div id="hud" class="absolute top-4 left-4 z-10 hidden flex-col sm:flex-row gap-2 sm:gap-4 items-start sm:items-center">
+            <div class="bg-white/80 backdrop-blur-sm px-4 py-2 rounded-lg font-bold text-xl shadow-sm border border-slate-200">
+                Score: <span id="scoreDisplay" class="text-blue-600">0</span>
+            </div>
+            <button id="buyAnchorBtn" class="hidden bg-amber-500 text-white px-3 py-2 rounded-lg font-bold shadow transition flex items-center gap-2">
+                <span>Buy Anchor (<span id="anchorCostDisplay">50</span> pts)</span>
+            </button>
+            <div id="anchorCountBox" class="hidden bg-slate-800 text-amber-400 px-3 py-2 rounded-lg font-bold shadow border border-slate-600">
+                Anchors: <span id="anchorCountDisplay">0</span>
+            </div>
+        </div>
+
+        <!-- Start Menu -->
+        <div id="startMenu" class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm text-white">
+            <h1 class="text-5xl font-extrabold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400 text-center">Save the Bubble!</h1>
+            <p class="text-lg mb-8 text-slate-300 text-center max-w-md px-4">Tap or click the red enemies before they reach your shield bubble.</p>
+            <button id="startBtn" class="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-bold py-4 px-10 rounded-full text-xl shadow-lg transform transition active:scale-95">
+                Play Now
+            </button>
+        </div>
+
+        <!-- Game Over Menu -->
+        <div id="gameOverMenu" class="absolute inset-0 z-20 hidden flex-col items-center justify-center bg-slate-900/90 backdrop-blur-md text-white">
+            <h2 class="text-5xl font-extrabold mb-2 text-rose-500">Bubble Popped!</h2>
+            <p class="text-2xl mb-8">Final Score: <span id="finalScore" class="font-bold text-blue-400">0</span></p>
+            <button id="restartBtn" class="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-white font-bold py-4 px-10 rounded-full text-xl shadow-lg transform transition active:scale-95">
+                Play Again
+            </button>
+        </div>
+
+        <!-- The Canvas -->
+        <canvas id="gameCanvas" width="800" height="600" class="block w-full h-full bg-slate-50"></canvas>
+    </div>
+
+    <script>
+        // DOM Elements
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startMenu = document.getElementById('startMenu');
+        const gameOverMenu = document.getElementById('gameOverMenu');
+        const hud = document.getElementById('hud');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const finalScoreDisplay = document.getElementById('finalScore');
+        const startBtn = document.getElementById('startBtn');
+        const restartBtn = document.getElementById('restartBtn');
+        const buyAnchorBtn = document.getElementById('buyAnchorBtn');
+        const anchorCostDisplay = document.getElementById('anchorCostDisplay');
+        const anchorCountBox = document.getElementById('anchorCountBox');
+        const anchorCountDisplay = document.getElementById('anchorCountDisplay');
+
+        // Game State Variables
+        let score = 0;
+        let enemies = [];
+        let particles = [];
+        let stingers = [];
+        let isGameOver = false;
+        let animationFrameId;
+        let spawnIntervalId;
+
+        let bubbleX = 400; // Center X
+        let bubbleY = 300; // Center Y
+        let isDragging = false;
+        let anchorsCount = 0;
+        let anchorCost = 50;
+        
+        let windState = 'IDLE'; // 'IDLE', 'WARNING', 'BLOWING'
+        let windTicks = 0;
+        let windVx = 0;
+        let windVy = 0;
+        let windAngle = 0;
+
+        // Core Configuration (Internal Resolution)
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 600;
+        const CENTER_X = CANVAS_WIDTH / 2;
+        const CENTER_Y = CANVAS_HEIGHT / 2;
+        const BUBBLE_RADIUS = 50;
+
+        // Reset and Start Game
+        function startGame() {
+            // Reset Variables
+            score = 0;
+            enemies = [];
+            particles = [];
+            stingers = [];
+            isGameOver = false;
+            
+            bubbleX = CENTER_X;
+            bubbleY = CENTER_Y;
+            isDragging = false;
+            anchorsCount = 0;
+            anchorCost = 50;
+            windState = 'IDLE';
+            buyAnchorBtn.classList.add('hidden');
+            anchorCountBox.classList.add('hidden');
+            updateHUD();
+
+            // Toggle UI
+            startMenu.classList.add('hidden');
+            gameOverMenu.classList.add('hidden');
+            hud.classList.remove('hidden');
+
+            // Start Spawning and Loop
+            clearInterval(spawnIntervalId);
+            spawnIntervalId = setInterval(spawnEnemy, 1000);
+            
+            generateStingers();
+            
+            cancelAnimationFrame(animationFrameId);
+            render();
+        }
+
+        // End Game
+        function endGame() {
+            isGameOver = true;
+            clearInterval(spawnIntervalId);
+            cancelAnimationFrame(animationFrameId);
+            
+            finalScoreDisplay.innerText = score;
+            hud.classList.add('hidden');
+            gameOverMenu.classList.remove('hidden');
+            gameOverMenu.classList.add('flex');
+        }
+
+        // Generate static stingers on the edges
+        function generateStingers() {
+            stingers = [];
+            const edges = ['top', 'bottom', 'left', 'right'];
+            const numPerEdge = 3; // 12 total stingers
+            
+            edges.forEach(edge => {
+                for (let i = 0; i < numPerEdge; i++) {
+                    let pos;
+                    if (edge === 'top' || edge === 'bottom') {
+                        // Avoid exact corners for fairness
+                        pos = CANVAS_WIDTH * 0.1 + Math.random() * (CANVAS_WIDTH * 0.8);
+                    } else {
+                        pos = CANVAS_HEIGHT * 0.1 + Math.random() * (CANVAS_HEIGHT * 0.8);
+                    }
+                    stingers.push({ edge, pos });
+                }
+            });
+        }
+
+        // Spawn a new enemy
+        function spawnEnemy() {
+            const size = 18;
+            let x, y;
+            
+            // Randomize spawn point just outside the canvas perimeter
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? 0 - size : CANVAS_WIDTH + size;
+                y = Math.random() * CANVAS_HEIGHT;
+            } else {
+                x = Math.random() * CANVAS_WIDTH;
+                y = Math.random() < 0.5 ? 0 - size : CANVAS_HEIGHT + size;
+            }
+
+            // Calculate trajectory toward the center
+            const angle = Math.atan2(bubbleY - y, bubbleX - x);
+            
+            // Difficulty curve: Speed increases as score goes up
+            const speed = 1.5 + (score * 0.015); 
+            
+            // Random bad guy character
+            const enemyTypes = ['😡', '😈', '👾', '👹', '🦇'];
+            const randomEmoji = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+
+            enemies.push({ 
+                x, y, 
+                radius: size, 
+                vx: Math.cos(angle) * speed, 
+                vy: Math.sin(angle) * speed,
+                emoji: randomEmoji
+            });
+        }
+
+        // Spawn splat particles when an enemy is tapped
+        function createSplat(x, y) {
+            for (let i = 0; i < 8; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    radius: Math.random() * 4 + 2,
+                    life: 1, // 1 to 0
+                    decay: Math.random() * 0.05 + 0.02
+                });
+            }
+        }
+
+        // Input Handling (Pointer Events for dragging and tapping)
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = CANVAS_WIDTH / rect.width;
+            const scaleY = CANVAS_HEIGHT / rect.height;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        function handlePointerDown(e) {
+            if (isGameOver) return;
+            if(e.type === 'touchstart') e.preventDefault();
+            
+            const pos = getPointerPos(e);
+            let tappedEnemy = false;
+
+            // 1. Check collisions with enemies first (splatting)
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+                const dist = Math.hypot(pos.x - enemy.x, pos.y - enemy.y);
+                if (dist < enemy.radius + 20) { 
+                    createSplat(enemy.x, enemy.y);
+                    enemies.splice(i, 1);
+                    score += 10;
+                    updateHUD();
+                    tappedEnemy = true;
+                    break; 
+                }
+            }
+
+            // 2. If no enemy was tapped, check if tapping bubble to drag
+            if (!tappedEnemy) {
+                const distToBubble = Math.hypot(pos.x - bubbleX, pos.y - bubbleY);
+                if (distToBubble < BUBBLE_RADIUS + 20) {
+                    isDragging = true;
+                }
+            }
+        }
+
+        function handlePointerMove(e) {
+            if (!isDragging || isGameOver) return;
+            if(e.type === 'touchmove') e.preventDefault();
+            
+            const pos = getPointerPos(e);
+            bubbleX = pos.x;
+            bubbleY = pos.y;
+            
+            // Keep bubble inside canvas bounds
+            bubbleX = Math.max(BUBBLE_RADIUS, Math.min(CANVAS_WIDTH - BUBBLE_RADIUS, bubbleX));
+            bubbleY = Math.max(BUBBLE_RADIUS, Math.min(CANVAS_HEIGHT - BUBBLE_RADIUS, bubbleY));
+        }
+
+        function handlePointerUp(e) {
+            isDragging = false;
+        }
+
+        function updateHUD() {
+            scoreDisplay.innerText = score;
+            anchorCostDisplay.innerText = anchorCost;
+            anchorCountDisplay.innerText = anchorsCount;
+            
+            // Show shop if player has progressed enough
+            if (score >= 50 || anchorsCount > 0) {
+                buyAnchorBtn.classList.remove('hidden');
+                anchorCountBox.classList.remove('hidden');
+            }
+            
+            // Style button based on affordability
+            if (score >= anchorCost) {
+                buyAnchorBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                buyAnchorBtn.classList.add('hover:bg-amber-400');
+            } else {
+                buyAnchorBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                buyAnchorBtn.classList.remove('hover:bg-amber-400');
+            }
+        }
+
+        // Shop Logic
+        buyAnchorBtn.addEventListener('click', () => {
+            if (score >= anchorCost) {
+                score -= anchorCost;
+                anchorsCount++;
+                anchorCost = Math.floor(anchorCost * 1.5); // Increase cost
+                updateHUD();
+            }
+        });
+
+        // Event Listeners
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+        
+        // Listen to mouse/touch events
+        canvas.addEventListener('mousedown', handlePointerDown);
+        canvas.addEventListener('mousemove', handlePointerMove);
+        canvas.addEventListener('mouseup', handlePointerUp);
+        canvas.addEventListener('mouseleave', handlePointerUp);
+
+        canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+        canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
+        canvas.addEventListener('touchend', handlePointerUp);
+        canvas.addEventListener('touchcancel', handlePointerUp);
+
+        // Helper to draw a glossy 3D bubble
+        function drawBubble(ctx, x, y, radius, anchors) {
+            ctx.save();
+            
+            // Base fill with a radial gradient for 3D depth
+            let baseColor = anchors > 0 ? 'rgba(2, 132, 199, 0.2)' : 'rgba(56, 189, 248, 0.1)';
+            let edgeColor = anchors > 0 ? 'rgba(2, 132, 199, 0.7)' : 'rgba(56, 189, 248, 0.5)';
+            
+            const grad = ctx.createRadialGradient(x, y, radius * 0.4, x, y, radius);
+            grad.addColorStop(0, baseColor);
+            grad.addColorStop(1, edgeColor);
+            
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = grad;
+            ctx.fill();
+            
+            // Bubble Outline (thicker and bluer if reinforced)
+            ctx.lineWidth = anchors > 0 ? 4 + (anchors * 1.5) : 2;
+            ctx.strokeStyle = anchors > 0 ? 'rgba(14, 165, 233, 0.9)' : 'rgba(255, 255, 255, 0.7)';
+            ctx.stroke();
+
+            // Primary Specular Highlight (glossy crescent on top-left)
+            ctx.beginPath();
+            ctx.ellipse(x - radius * 0.35, y - radius * 0.35, radius * 0.4, radius * 0.12, Math.PI / -4, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+            ctx.fill();
+            
+            // Secondary ambient reflection (soft curve on bottom right)
+            ctx.beginPath();
+            ctx.arc(x, y, radius * 0.85, 0, Math.PI * 0.45);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = radius * 0.08;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Tiny extra specular dot for max glassiness
+            ctx.beginPath();
+            ctx.arc(x - radius * 0.1, y - radius * 0.55, radius * 0.06, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        // Main Game Loop
+        function render() {
+            if (isGameOver) return;
+
+            // Wind Logic Update
+            if (windState === 'IDLE') {
+                if (Math.random() < 0.003 && score >= 30) { 
+                    windState = 'WARNING';
+                    windTicks = 120; // 2 seconds warning at 60fps
+                    windAngle = Math.random() * Math.PI * 2;
+                }
+            } else if (windState === 'WARNING') {
+                windTicks--;
+                if (windTicks <= 0) {
+                    windState = 'BLOWING';
+                    windTicks = 180; // 3 seconds of blowing
+                    
+                    // Anchor reduces wind force
+                    let baseForce = 4 + (score * 0.01);
+                    let effectiveForce = Math.max(0.5, baseForce - (anchorsCount * 1.5)); 
+                    windVx = Math.cos(windAngle) * effectiveForce;
+                    windVy = Math.sin(windAngle) * effectiveForce;
+                }
+            } else if (windState === 'BLOWING') {
+                windTicks--;
+                if (!isDragging) {
+                    bubbleX += windVx;
+                    bubbleY += windVy;
+                    // Keep in bounds
+                    bubbleX = Math.max(BUBBLE_RADIUS, Math.min(CANVAS_WIDTH - BUBBLE_RADIUS, bubbleX));
+                    bubbleY = Math.max(BUBBLE_RADIUS, Math.min(CANVAS_HEIGHT - BUBBLE_RADIUS, bubbleY));
+                }
+                if (windTicks <= 0) windState = 'IDLE';
+            }
+
+            // Clear Canvas
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw Wind Elements
+            if (windState === 'WARNING') {
+                ctx.save();
+                ctx.globalAlpha = Math.abs(Math.sin(windTicks * 0.1)); // Flashing effect
+                ctx.fillStyle = '#ef4444'; // red-500
+                ctx.font = 'bold 32px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('⚠️ WIND INCOMING! ⚠️', CENTER_X, 80);
+                
+                // Draw directional arrow
+                ctx.translate(CENTER_X, 130);
+                ctx.rotate(windAngle);
+                ctx.fillStyle = '#ef4444';
+                ctx.beginPath();
+                ctx.moveTo(25, 0);
+                ctx.lineTo(-15, -20);
+                ctx.lineTo(-15, 20);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            if (windState === 'BLOWING') {
+                ctx.save();
+                ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)'; // slate-400
+                ctx.lineWidth = 3;
+                for(let i = 0; i < 6; i++) {
+                    let rx = Math.random() * CANVAS_WIDTH;
+                    let ry = Math.random() * CANVAS_HEIGHT;
+                    ctx.beginPath();
+                    ctx.moveTo(rx, ry);
+                    ctx.lineTo(rx + windVx * 4, ry + windVy * 4);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // Draw Stingers & Check Stinger Collisions
+            ctx.fillStyle = '#475569'; // slate-600
+            const STINGER_SIZE = 35;
+            const BASE_WIDTH = 20;
+
+            stingers.forEach(stinger => {
+                let tipX, tipY, base1X, base1Y, base2X, base2Y;
+
+                if (stinger.edge === 'top') {
+                    tipX = stinger.pos; tipY = STINGER_SIZE;
+                    base1X = stinger.pos - BASE_WIDTH; base1Y = 0;
+                    base2X = stinger.pos + BASE_WIDTH; base2Y = 0;
+                } else if (stinger.edge === 'bottom') {
+                    tipX = stinger.pos; tipY = CANVAS_HEIGHT - STINGER_SIZE;
+                    base1X = stinger.pos - BASE_WIDTH; base1Y = CANVAS_HEIGHT;
+                    base2X = stinger.pos + BASE_WIDTH; base2Y = CANVAS_HEIGHT;
+                } else if (stinger.edge === 'left') {
+                    tipX = STINGER_SIZE; tipY = stinger.pos;
+                    base1X = 0; base1Y = stinger.pos - BASE_WIDTH;
+                    base2X = 0; base2Y = stinger.pos + BASE_WIDTH;
+                } else if (stinger.edge === 'right') {
+                    tipX = CANVAS_WIDTH - STINGER_SIZE; tipY = stinger.pos;
+                    base1X = CANVAS_WIDTH; base1Y = stinger.pos - BASE_WIDTH;
+                    base2X = CANVAS_WIDTH; base2Y = stinger.pos + BASE_WIDTH;
+                }
+
+                // Draw Triangle
+                ctx.beginPath();
+                ctx.moveTo(tipX, tipY);
+                ctx.lineTo(base1X, base1Y);
+                ctx.lineTo(base2X, base2Y);
+                ctx.closePath();
+                ctx.fill();
+
+                // Check Collision (slightly forgiving hitbox so the spike has to pierce it)
+                const distToStinger = Math.hypot(bubbleX - tipX, bubbleY - tipY);
+                if (distToStinger < BUBBLE_RADIUS - 5) {
+                    endGame();
+                }
+            });
+
+            // 1. Draw Fun Dynamic Element Inside
+            let currentEmoji = '🙂';
+            if (isGameOver) {
+                currentEmoji = '😵';
+            } else if (windState === 'BLOWING') {
+                currentEmoji = '😱';
+            } else if (windState === 'WARNING') {
+                currentEmoji = '😰';
+            } else if (isDragging) {
+                currentEmoji = '😲';
+            } else if (anchorsCount > 0) {
+                currentEmoji = '😎';
+            }
+
+            ctx.font = '45px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            // Add a slight bobbing animation to the character so it looks afloat
+            const bobOffset = Math.sin(Date.now() / 200) * 3;
+            ctx.fillText(currentEmoji, bubbleX, bubbleY + bobOffset);
+
+            // 2. Draw Glossy Reflective Bubble over the character
+            drawBubble(ctx, bubbleX, bubbleY, BUBBLE_RADIUS, anchorsCount);
+
+            // 3. Update & Draw Particles (Splat effect)
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= p.decay;
+
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(244, 63, 94, ${p.life})`; // Tailwind rose-500
+                    ctx.fill();
+                }
+            }
+
+            // 4. Update & Draw Enemies
+            enemies.forEach((enemy) => {
+                enemy.x += enemy.vx;
+                enemy.y += enemy.vy;
+
+                // Draw Enemy Aura (Soft red glow behind the character)
+                ctx.beginPath();
+                ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(244, 63, 94, 0.4)'; // Tailwind rose-500 transparent
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(159, 18, 57, 0.3)'; // Tailwind rose-900 transparent
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Draw Enemy Character
+                ctx.font = '26px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                // Add a small jitter/wobble effect so they look alive and squiggly
+                const wobbleX = Math.sin((Date.now() + enemy.y) / 100) * 2;
+                const wobbleY = Math.cos((Date.now() + enemy.x) / 100) * 2;
+                
+                ctx.fillText(enemy.emoji, enemy.x + wobbleX, enemy.y + wobbleY);
+
+                // Check Collision with Bubble
+                const distToCenter = Math.hypot(bubbleX - enemy.x, bubbleY - enemy.y);
+                if (distToCenter - enemy.radius - BUBBLE_RADIUS < 0) {
+                    endGame();
+                }
+            });
+
+            // Loop
+            animationFrameId = requestAnimationFrame(render);
+        }
+        
+        // Initial Draw (just the background/bubble before starting)
+        ctx.fillStyle = '#f8fafc'; // Tailwind slate-50
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        ctx.font = '45px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('😴', CENTER_X, CENTER_Y); 
+        
+        drawBubble(ctx, CENTER_X, CENTER_Y, BUBBLE_RADIUS, 0);
+
+    </script>
+</body>
+</html>
