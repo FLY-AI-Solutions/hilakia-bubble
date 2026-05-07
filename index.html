@@ -17,21 +17,28 @@
         }
     </style>
 </head>
-<body class="bg-slate-900 min-h-screen flex items-center justify-center font-sans text-slate-800 p-4">
+<body class="bg-slate-900 h-screen w-screen overflow-hidden font-sans text-slate-800">
 
     <!-- Game Container -->
-    <div class="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden" style="aspect-ratio: 4/3;">
+    <div class="relative w-full h-full bg-slate-50 overflow-hidden">
         
         <!-- Score HUD -->
-        <div id="hud" class="absolute top-4 left-4 z-10 hidden flex-col sm:flex-row gap-2 sm:gap-4 items-start sm:items-center">
+        <div id="hud" class="absolute top-8 sm:top-4 left-4 z-10 hidden flex-row gap-3 items-center">
             <div class="bg-white/80 backdrop-blur-sm px-4 py-2 rounded-lg font-bold text-xl shadow-sm border border-slate-200">
                 Score: <span id="scoreDisplay" class="text-blue-600">0</span>
             </div>
-            <button id="buyAnchorBtn" class="hidden bg-amber-500 text-white px-3 py-2 rounded-lg font-bold shadow transition flex items-center gap-2">
-                <span>Buy Anchor (<span id="anchorCostDisplay">50</span> pts)</span>
+            
+            <button id="buyAnchorBtn" class="hidden flex flex-col items-center justify-center transition-transform group" title="Buy Shield">
+                <div class="text-3xl bg-white/80 backdrop-blur-md rounded-full shadow-sm flex items-center justify-center w-12 h-12 border-2 border-slate-300 group-hover:border-amber-400 transition-colors">
+                    🛡️
+                </div>
+                <div class="text-[10px] sm:text-xs font-bold bg-slate-800 text-amber-400 px-2 py-0.5 rounded-full -mt-2 border border-slate-600 shadow-sm relative z-10">
+                    <span id="anchorCostDisplay">50</span> pts
+                </div>
             </button>
-            <div id="anchorCountBox" class="hidden bg-slate-800 text-amber-400 px-3 py-2 rounded-lg font-bold shadow border border-slate-600">
-                Anchors: <span id="anchorCountDisplay">0</span>
+
+            <div id="anchorCountBox" class="hidden bg-slate-800 text-amber-400 px-3 py-2 rounded-lg font-bold shadow border border-slate-600 flex items-center gap-1">
+                🛡️ <span id="anchorCountDisplay">0</span>
             </div>
         </div>
 
@@ -54,7 +61,7 @@
         </div>
 
         <!-- The Canvas -->
-        <canvas id="gameCanvas" width="800" height="600" class="block w-full h-full bg-slate-50"></canvas>
+        <canvas id="gameCanvas" class="block w-full h-full bg-slate-50"></canvas>
     </div>
 
     <script>
@@ -87,6 +94,7 @@
         let isDragging = false;
         let anchorsCount = 0;
         let anchorCost = 50;
+        let invulnerableTicks = 0; // Tracks i-frames after shield breaks
         
         let windState = 'IDLE'; // 'IDLE', 'WARNING', 'BLOWING'
         let windTicks = 0;
@@ -94,12 +102,16 @@
         let windVy = 0;
         let windAngle = 0;
 
-        // Core Configuration (Internal Resolution)
-        const CANVAS_WIDTH = 800;
-        const CANVAS_HEIGHT = 600;
-        const CENTER_X = CANVAS_WIDTH / 2;
-        const CENTER_Y = CANVAS_HEIGHT / 2;
+        // Core Configuration (Dynamic Resolution for Mobile)
+        let CANVAS_WIDTH = window.innerWidth;
+        let CANVAS_HEIGHT = window.innerHeight;
+        let CENTER_X = CANVAS_WIDTH / 2;
+        let CENTER_Y = CANVAS_HEIGHT / 2;
         const BUBBLE_RADIUS = 50;
+
+        // Set initial canvas size
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
 
         // Reset and Start Game
         function startGame() {
@@ -115,6 +127,7 @@
             isDragging = false;
             anchorsCount = 0;
             anchorCost = 50;
+            invulnerableTicks = 0;
             windState = 'IDLE';
             buyAnchorBtn.classList.add('hidden');
             anchorCountBox.classList.add('hidden');
@@ -217,14 +230,12 @@
 
         // Input Handling (Pointer Events for dragging and tapping)
         function getPointerPos(e) {
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = CANVAS_WIDTH / rect.width;
-            const scaleY = CANVAS_HEIGHT / rect.height;
+            // Because canvas size now exactly matches window size, we don't need scaling math
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             return {
-                x: (clientX - rect.left) * scaleX,
-                y: (clientY - rect.top) * scaleY
+                x: clientX,
+                y: clientY
             };
         }
 
@@ -287,12 +298,13 @@
             }
             
             // Style button based on affordability
+            buyAnchorBtn.disabled = score < anchorCost;
             if (score >= anchorCost) {
-                buyAnchorBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-                buyAnchorBtn.classList.add('hover:bg-amber-400');
+                buyAnchorBtn.classList.remove('opacity-50', 'grayscale', 'cursor-not-allowed');
+                buyAnchorBtn.classList.add('hover:scale-105', 'cursor-pointer', 'active:scale-95');
             } else {
-                buyAnchorBtn.classList.add('opacity-50', 'cursor-not-allowed');
-                buyAnchorBtn.classList.remove('hover:bg-amber-400');
+                buyAnchorBtn.classList.add('opacity-50', 'grayscale', 'cursor-not-allowed');
+                buyAnchorBtn.classList.remove('hover:scale-105', 'cursor-pointer', 'active:scale-95');
             }
         }
 
@@ -369,6 +381,11 @@
         // Main Game Loop
         function render() {
             if (isGameOver) return;
+
+            // Tick down invincibility frames
+            if (invulnerableTicks > 0) {
+                invulnerableTicks--;
+            }
 
             // Wind Logic Update
             if (windState === 'IDLE') {
@@ -477,14 +494,33 @@
                 // Check Collision (slightly forgiving hitbox so the spike has to pierce it)
                 const distToStinger = Math.hypot(bubbleX - tipX, bubbleY - tipY);
                 if (distToStinger < BUBBLE_RADIUS - 5) {
-                    endGame();
+                    if (invulnerableTicks === 0) {
+                        if (anchorsCount > 0) {
+                            anchorsCount--;
+                            invulnerableTicks = 90; // 1.5 seconds of invincibility
+                            updateHUD();
+                            createSplat(bubbleX, bubbleY); // Pop effect on bubble
+                            // Slight bounce back toward the center to prevent re-sticking
+                            bubbleX += (CENTER_X - tipX) * 0.1;
+                            bubbleY += (CENTER_Y - tipY) * 0.1;
+                        } else {
+                            endGame();
+                        }
+                    }
                 }
             });
+
+            // Flash effect if recently took damage
+            if (invulnerableTicks > 0) {
+                ctx.globalAlpha = (Math.floor(Date.now() / 100) % 2 === 0) ? 0.4 : 1.0;
+            }
 
             // 1. Draw Fun Dynamic Element Inside
             let currentEmoji = '🙂';
             if (isGameOver) {
                 currentEmoji = '😵';
+            } else if (invulnerableTicks > 0) {
+                currentEmoji = '😖'; // Wincing after shield break
             } else if (windState === 'BLOWING') {
                 currentEmoji = '😱';
             } else if (windState === 'WARNING') {
@@ -505,6 +541,9 @@
             // 2. Draw Glossy Reflective Bubble over the character
             drawBubble(ctx, bubbleX, bubbleY, BUBBLE_RADIUS, anchorsCount);
 
+            // Reset alpha so particles and enemies draw normally
+            ctx.globalAlpha = 1.0; 
+
             // 3. Update & Draw Particles (Splat effect)
             for (let i = particles.length - 1; i >= 0; i--) {
                 let p = particles[i];
@@ -523,7 +562,8 @@
             }
 
             // 4. Update & Draw Enemies
-            enemies.forEach((enemy) => {
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let enemy = enemies[i];
                 enemy.x += enemy.vx;
                 enemy.y += enemy.vy;
 
@@ -550,24 +590,58 @@
                 // Check Collision with Bubble
                 const distToCenter = Math.hypot(bubbleX - enemy.x, bubbleY - enemy.y);
                 if (distToCenter - enemy.radius - BUBBLE_RADIUS < 0) {
-                    endGame();
+                    if (invulnerableTicks === 0) {
+                        if (anchorsCount > 0) {
+                            anchorsCount--;
+                            invulnerableTicks = 90; // 1.5 seconds of invincibility
+                            updateHUD();
+                            createSplat(enemy.x, enemy.y); // Splat the enemy
+                            enemies.splice(i, 1); // Remove the enemy that broke the shield
+                        } else {
+                            endGame();
+                        }
+                    }
                 }
-            });
+            }
 
             // Loop
             animationFrameId = requestAnimationFrame(render);
         }
         
         // Initial Draw (just the background/bubble before starting)
-        ctx.fillStyle = '#f8fafc'; // Tailwind slate-50
-        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        
-        ctx.font = '45px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('😴', CENTER_X, CENTER_Y); 
-        
-        drawBubble(ctx, CENTER_X, CENTER_Y, BUBBLE_RADIUS, 0);
+        function drawIdleScreen() {
+            ctx.fillStyle = '#f8fafc'; // Tailwind slate-50
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            
+            ctx.font = '45px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('😴', CENTER_X, CENTER_Y); 
+            
+            drawBubble(ctx, CENTER_X, CENTER_Y, BUBBLE_RADIUS, 0);
+        }
+
+        drawIdleScreen();
+
+        // Handle Screen Resizing (Orientation changes on phone)
+        window.addEventListener('resize', () => {
+            CANVAS_WIDTH = window.innerWidth;
+            CANVAS_HEIGHT = window.innerHeight;
+            canvas.width = CANVAS_WIDTH;
+            canvas.height = CANVAS_HEIGHT;
+            CENTER_X = CANVAS_WIDTH / 2;
+            CENTER_Y = CANVAS_HEIGHT / 2;
+
+            // Ensure bubble stays in bounds during resize
+            bubbleX = Math.min(bubbleX, CANVAS_WIDTH - BUBBLE_RADIUS);
+            bubbleY = Math.min(bubbleY, CANVAS_HEIGHT - BUBBLE_RADIUS);
+
+            if (!isGameOver && startMenu.classList.contains('hidden')) {
+                generateStingers(); // Readjust edge traps
+            } else if (!startMenu.classList.contains('hidden')) {
+                drawIdleScreen(); // Redraw menu background
+            }
+        });
 
     </script>
 </body>
